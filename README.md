@@ -4,11 +4,11 @@ This repository contains the code for training a Generative Adversarial Network 
 
 ## Dependencies
 
-- Python 3.x
-- PyTorch
-- torchvision
-- matplotlib
-- numpy
+-   Python 3.x
+-   PyTorch
+-   torchvision
+-   matplotlib
+-   numpy
 
 To install the required packages, run the following command:
 
@@ -49,8 +49,8 @@ This will generate 5 faces using the trained model.
 
 The GAN consists of a Generator and a Discriminator, both implemented as convolutional neural networks.
 
-- The Generator takes a random noise vector as input and generates a 128x128 RGB image.
-- The Discriminator takes a 128x128 RGB image as input and classifies it as real or fake.
+-   The Generator takes a random noise vector as input and generates a 64x64 RGB image.
+-   The Discriminator takes a 128x128 RGB image as input and classifies it as real or fake.
 
 ## Results
 

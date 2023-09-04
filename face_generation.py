@@ -4,35 +4,57 @@ import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 import torch.nn as nn
+from torch.nn.utils import spectral_norm
 
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels):
+        super(ResidualBlock, self).__init__()
+        
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(in_channels)
+        )
+            
+    def forward(self, x):
+        return x + self.block(x)
 class Generator(nn.Module):
     def __init__(self, nz, ngf, nc):
         super(Generator, self).__init__()
         self.main = nn.Sequential(
             # input is Z, going into a convolution
-            nn.ConvTranspose2d(nz, ngf * 16, 4, 1, 0, bias=False),
-            nn.BatchNorm2d(ngf * 16),
-            nn.ReLU(True),
-            # state size. (ngf*16) x 4 x 4
-            nn.ConvTranspose2d(ngf * 16, ngf * 8, 4, 2, 1, bias=False),
+            spectral_norm(nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False)),
             nn.BatchNorm2d(ngf * 8),
             nn.ReLU(True),
-            # state size. (ngf*8) x 8 x 8
-            nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
+            # state size. (ngf*8) x 4 x 4
+            
+            spectral_norm(nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False)),
             nn.BatchNorm2d(ngf * 4),
             nn.ReLU(True),
-            # state size. (ngf*4) x 16 x 16
-            nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
+            # state size. (ngf*4) x 8 x 8
+            ResidualBlock(ngf * 4),  # Adding the residual block here
+            
+            spectral_norm(nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False)),
             nn.BatchNorm2d(ngf * 2),
             nn.ReLU(True),
-            # state size. (ngf*2) x 32 x 32
-            nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False),
+            # state size. (ngf*2) x 16 x 16
+            
+            spectral_norm(nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False)),
+            nn.BatchNorm2d(ngf),
+            nn.ReLU(True),
+            # state size. (ngf) x 32 x 32
+            ResidualBlock(ngf),  # Adding another residual block here
+            
+            spectral_norm(nn.ConvTranspose2d(ngf, ngf, 4, 2, 1, bias=False)),
             nn.BatchNorm2d(ngf),
             nn.ReLU(True),
             # state size. (ngf) x 64 x 64
-            nn.ConvTranspose2d(ngf, nc, 4, 2, 1, bias=False),
+
+            spectral_norm(nn.ConvTranspose2d(ngf, nc, 4, 2, 1, bias=False)),
             nn.Tanh()
-            # state size. (nc) x 128 x 128
+            # final state size. (nc) x 128 x 128
         )
 
     def forward(self, input):
