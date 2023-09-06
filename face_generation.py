@@ -10,6 +10,9 @@ class ResidualBlock(nn.Module):
     def __init__(self, in_channels):
         super(ResidualBlock, self).__init__()
         
+        # Define the residual block with two convolutional layers
+        # followed by batch normalization. The number of channels remains
+        # unchanged across the block.
         self.block = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(in_channels),
@@ -19,45 +22,39 @@ class ResidualBlock(nn.Module):
         )
             
     def forward(self, x):
+        # Add the input to the output of the block (residual connection)
         return x + self.block(x)
+
 class Generator(nn.Module):
     def __init__(self, nz, ngf, nc):
         super(Generator, self).__init__()
+        # Define the generator architecture
         self.main = nn.Sequential(
-            # input is Z, going into a convolution
-            spectral_norm(nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False)),
+            # Initial convolutional transpose layer to upscale the latent vector
+            nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
             nn.BatchNorm2d(ngf * 8),
             nn.ReLU(True),
-            # state size. (ngf*8) x 4 x 4
-            
-            spectral_norm(nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False)),
+            # Upscale to 8x8
+            nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ngf * 4),
             nn.ReLU(True),
-            # state size. (ngf*4) x 8 x 8
-            ResidualBlock(ngf * 4),  # Adding the residual block here
-            
-            spectral_norm(nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False)),
+            # Upscale to 16x16
+            nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ngf * 2),
             nn.ReLU(True),
-            # state size. (ngf*2) x 16 x 16
-            
-            spectral_norm(nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False)),
+            # Apply residual block
+            ResidualBlock(ngf * 2),
+            # Upscale to 32x32
+            nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ngf),
             nn.ReLU(True),
-            # state size. (ngf) x 32 x 32
-            ResidualBlock(ngf),  # Adding another residual block here
-            
-            spectral_norm(nn.ConvTranspose2d(ngf, ngf, 4, 2, 1, bias=False)),
-            nn.BatchNorm2d(ngf),
-            nn.ReLU(True),
-            # state size. (ngf) x 64 x 64
-
-            spectral_norm(nn.ConvTranspose2d(ngf, nc, 4, 2, 1, bias=False)),
+            # Upscale to final image size of 64x64 with 3 channels (RGB)
+            nn.ConvTranspose2d(ngf, nc, 4, 2, 1, bias=False),
             nn.Tanh()
-            # final state size. (nc) x 128 x 128
         )
 
     def forward(self, input):
+        # Forward pass through the generator
         return self.main(input)
 
 device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
@@ -74,10 +71,9 @@ netG.load_state_dict(torch.load('generator.pth'))
 netG = netG.to(device, dtype=torch.float32)
 netG.eval()
 
-
 # Generate faces
 def generate_faces(netG, device, num_faces=1):
-    noise = torch.randn(num_faces, nz, 1, 1, device=device, dtype=torch.float32)
+    noise = torch.randn((num_faces, nz, 1, 1), device=device, dtype=torch.float32)
     with torch.no_grad():
         faces = netG(noise).detach().cpu()
     return faces

@@ -7,7 +7,9 @@ import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 from torch.nn.utils import spectral_norm
 import matplotlib.pyplot as plt
-from torch.utils.tensorboard import SummaryWriter
+import numpy as np
+import time
+
 
 # Move model to GPU if available
 device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
@@ -16,6 +18,9 @@ class ResidualBlock(nn.Module):
     def __init__(self, in_channels):
         super(ResidualBlock, self).__init__()
         
+        # Define the residual block with two convolutional layers
+        # followed by batch normalization. The number of channels remains
+        # unchanged across the block.
         self.block = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(in_channels),
@@ -25,100 +30,98 @@ class ResidualBlock(nn.Module):
         )
             
     def forward(self, x):
+        # Add the input to the output of the block (residual connection)
         return x + self.block(x)
 
-# Define the Generator class
-# Note this Generator class is setup for 128x128 px image generation
-# if you wish to use a higher or lower pixel ratio add in further or less tensors
 class Generator(nn.Module):
     def __init__(self, nz, ngf, nc):
         super(Generator, self).__init__()
+        # Define the generator architecture
         self.main = nn.Sequential(
-            # input is Z, going into a convolution
-            spectral_norm(nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False)),
+            # Initial convolutional transpose layer to upscale the latent vector
+            nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
             nn.BatchNorm2d(ngf * 8),
             nn.ReLU(True),
-            # state size. (ngf*8) x 4 x 4
-            
-            spectral_norm(nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False)),
+            # Upscale to 8x8
+            nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ngf * 4),
             nn.ReLU(True),
-            # state size. (ngf*4) x 8 x 8
-            ResidualBlock(ngf * 4),  # Adding the residual block here
-            
-            spectral_norm(nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False)),
+            # Upscale to 16x16
+            nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ngf * 2),
             nn.ReLU(True),
-            # state size. (ngf*2) x 16 x 16
-            
-            spectral_norm(nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False)),
+            # Apply residual block
+            ResidualBlock(ngf * 2),
+            # Upscale to 32x32
+            nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ngf),
             nn.ReLU(True),
-            # state size. (ngf) x 32 x 32
-            ResidualBlock(ngf),  # Adding another residual block here
-            
-            spectral_norm(nn.ConvTranspose2d(ngf, ngf, 4, 2, 1, bias=False)),
-            nn.BatchNorm2d(ngf),
-            nn.ReLU(True),
-            # state size. (ngf) x 64 x 64
-
-            spectral_norm(nn.ConvTranspose2d(ngf, nc, 4, 2, 1, bias=False)),
+            # Upscale to final image size of 64x64 with 3 channels (RGB)
+            nn.ConvTranspose2d(ngf, nc, 4, 2, 1, bias=False),
             nn.Tanh()
-            # final state size. (nc) x 128 x 128
         )
 
     def forward(self, input):
+        # Forward pass through the generator
         return self.main(input)
 
 class Discriminator(nn.Module):
     def __init__(self, nc, ndf):
         super(Discriminator, self).__init__()
+        # Define the discriminator architecture
         self.main = nn.Sequential(
-            # input is (nc) x 128 x 128
-            spectral_norm(nn.Conv2d(nc, ndf, 4, 2, 1, bias=False)),
+            # Initial convolutional layer for 64x64 input
+            nn.Conv2d(nc, ndf, 4, 2, 1, bias=False),
             nn.LeakyReLU(0.2, inplace=True),
-
-            spectral_norm(nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False)),
+            # Downscale to 32x32
+            nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ndf * 2),
             nn.LeakyReLU(0.2, inplace=True),
-            # state size. (ndf*2) x 32 x 32
-            
-            spectral_norm(nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False)),
+            # Downscale to 16x16
+            nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ndf * 4),
             nn.LeakyReLU(0.2, inplace=True),
-            # state size. (ndf*4) x 16 x 16
+            # Apply residual block
             ResidualBlock(ndf * 4),
-            
-            spectral_norm(nn.Conv2d(ndf * 4, ndf * 8, 4, 2, 1, bias=False)),
+            # Downscale to 8x8
+            nn.Conv2d(ndf * 4, ndf * 8, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ndf * 8),
             nn.LeakyReLU(0.2, inplace=True),
-            # state size. (ndf*8) x 8 x 8
-            
-            spectral_norm(nn.Conv2d(ndf * 8, ndf * 16, 4, 2, 1, bias=False)),
-            nn.BatchNorm2d(ndf * 16),
-            nn.LeakyReLU(0.2, inplace=True),
-            # state size. (ndf*16) x 4 x 4
-            
-            spectral_norm(nn.Conv2d(ndf * 16, 1, 4, 1, 0, bias=False)),
+            # Final convolutional layer to produce a single output value (real/fake classification)
+            nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False),
             nn.Sigmoid()
-            # final state size. 1 x 1 x 1 (scalar)
         )
 
     def forward(self, input):
+        # Forward pass through the discriminator
         return self.main(input)
 
+
+manual_seed = 999
+torch.manual_seed(manual_seed)
+torch.use_deterministic_algorithms(True) # Needed for reproducible results
+
+# custom weights initialization called on ``netG`` and ``netD``
+def weights_init(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        nn.init.normal_(m.weight.data, 0.0, 0.02)
+    elif classname.find('BatchNorm') != -1:
+        nn.init.normal_(m.weight.data, 1.0, 0.02)
+        nn.init.constant_(m.bias.data, 0)
 
 def main():
     # Define transformations
     transform = transforms.Compose([
-        transforms.Resize((128, 128)),  # Adjusted the resize transformation
+        transforms.Resize((64, 64)),
+        transforms.CenterCrop((64, 64)),
         transforms.ToTensor(),
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     ])
 
     # Load CelebA dataset
     dataset = datasets.CelebA(root='./data', split='train', transform=transform, download=True)
-    dataloader = DataLoader(dataset, batch_size=64, shuffle=True, num_workers=6)
+    dataloader = DataLoader(dataset, batch_size=128, shuffle=True, num_workers=6)
 
     # Hyperparameters
     nc = 3 # Number of channels in the training images
@@ -129,6 +132,9 @@ def main():
     # Create the Generator and Discriminator
     netG = Generator(nz, ngf, nc).to(device)
     netD = Discriminator(nc, ndf).to(device)
+
+    # Apply weights to generator
+    netG.apply(weights_init)
 
     # Print the models
     print(netG)
@@ -149,21 +155,20 @@ def main():
     schedulerG = optim.lr_scheduler.StepLR(optimizerG, step_size=30, gamma=0.9)
 
     # Labels for real and fake images with label smoothing
-    real_label = 0.9  # Using 0.9 instead of 1.0
-    fake_label = 0.0
-
-    # Fixed noise for visualization
-    fixed_noise = torch.randn(64, nz, 1, 1, device=device, dtype=torch.float32)
+    real_label = 0.9
+    fake_label = 0.1
 
     # Training loop
-    num_epochs = 15 # Number of epochs (for demonstration purposes, you should train for more epochs)
-    img_list = []
+    num_epochs = 40 # Number of epochs (for demonstration purposes, you should train for more epochs)
     G_losses = []
     D_losses = []
     iters = 0
 
+    # For periodic visualization
+    fixed_noise = torch.randn((40, nz, 1, 1), device=device, dtype=torch.float32)
+
     print("Starting Training Loop...")
-    for epoch in range(num_epochs):
+    for epoch in range(1, num_epochs + 1):
         
         for i, data in enumerate(dataloader, 0):
             
@@ -227,17 +232,26 @@ def main():
             G_losses.append(errG.item())
             D_losses.append(errD.item())
 
-            # Check how the generator is doing by saving G's output on fixed_noise
-            if (iters % 500 == 0) or ((epoch == num_epochs-1) and (i == len(dataloader)-1)):
-                with torch.no_grad():
-                    fake = netG(fixed_noise).detach().cpu()
-                img_list.append(torchvision.utils.make_grid(fake, padding=2, normalize=True))
-
             iters += 1
         
         # Update learning rate at the end of each epoch
         schedulerD.step()
         schedulerG.step()
+
+        # Visualize after every 5 epochs
+        if epoch % 5 == 0:
+            netG.eval()  # Set to evaluation mode
+            with torch.no_grad():
+                fake_images = netG(fixed_noise).detach().cpu()
+            plt.figure(figsize=(8, 8))
+            plt.axis("off")
+            plt.imshow(np.transpose(torchvision.utils.make_grid(fake_images, padding=2, normalize=True), (1, 2, 0)))
+            plt.show()
+            
+            time.sleep(5)  # Display for 5 seconds
+            plt.close()  # Close the plot
+            
+            netG.train()  # Set back to training mode
 
     # Save the models
     torch.save(netG.state_dict(), 'generator.pth')
@@ -254,13 +268,6 @@ def main():
     plt.ylabel("Loss")
     plt.legend()
     plt.show()
-
-    # Visualisation of model architecture
-    writer = SummaryWriter()
-    # Add the model to tensorboard
-    writer.add_graph(netG, torch.randn(1, 100, 1, 1).to(device))
-    writer.add_graph(netD, torch.randn(1, 3, 128, 128).to(device))
-    writer.close()
 
 
 if __name__ == "__main__":
