@@ -8,8 +8,6 @@ from torch.utils.data import DataLoader
 from torch.nn.utils import spectral_norm
 import matplotlib.pyplot as plt
 import numpy as np
-import time
-
 
 # Move model to GPU if available
 device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
@@ -17,10 +15,6 @@ device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels):
         super(ResidualBlock, self).__init__()
-        
-        # Define the residual block with two convolutional layers
-        # followed by batch normalization. The number of channels remains
-        # unchanged across the block.
         self.block = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(in_channels),
@@ -36,72 +30,69 @@ class ResidualBlock(nn.Module):
 class Generator(nn.Module):
     def __init__(self, nz, ngf, nc):
         super(Generator, self).__init__()
-        # Define the generator architecture
         self.main = nn.Sequential(
-            # Initial convolutional transpose layer to upscale the latent vector
+            # Initial size: nz x 1 x 1
             nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
             nn.BatchNorm2d(ngf * 8),
             nn.ReLU(True),
-            # Upscale to 8x8
+            # Size: (ngf*4 x 4 x 4)
             nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ngf * 4),
             nn.ReLU(True),
-            # Upscale to 16x16
+            # Size: (ngf*4 x 8 x 8)
             nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ngf * 2),
             nn.ReLU(True),
-            # Apply residual block
+            # Apply residual
             ResidualBlock(ngf * 2),
-            # Upscale to 32x32
+            # Size: (ngf*2 x 16 x 16)
             nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ngf),
             nn.ReLU(True),
-            # Upscale to final image size of 64x64 with 3 channels (RGB)
+            # Size: (ngf x 32 x 32)
             nn.ConvTranspose2d(ngf, nc, 4, 2, 1, bias=False),
             nn.Tanh()
+            # Final size: (nc x 64 x 64)
         )
 
     def forward(self, input):
-        # Forward pass through the generator
         return self.main(input)
 
 class Discriminator(nn.Module):
     def __init__(self, nc, ndf):
         super(Discriminator, self).__init__()
-        # Define the discriminator architecture
         self.main = nn.Sequential(
-            # Initial convolutional layer for 64x64 input
             nn.Conv2d(nc, ndf, 4, 2, 1, bias=False),
             nn.LeakyReLU(0.2, inplace=True),
-            # Downscale to 32x32
+            
             nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ndf * 2),
             nn.LeakyReLU(0.2, inplace=True),
-            # Downscale to 16x16
+            
             nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ndf * 4),
             nn.LeakyReLU(0.2, inplace=True),
-            # Apply residual block
+            
             ResidualBlock(ndf * 4),
-            # Downscale to 8x8
+
             nn.Conv2d(ndf * 4, ndf * 8, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ndf * 8),
             nn.LeakyReLU(0.2, inplace=True),
-            # Final convolutional layer to produce a single output value (real/fake classification)
+            
             nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False),
             nn.Sigmoid()
         )
 
     def forward(self, input):
-        # Forward pass through the discriminator
         return self.main(input)
-
 
 manual_seed = 999
 torch.manual_seed(manual_seed)
 torch.use_deterministic_algorithms(True) # Needed for reproducible results
 
-# custom weights initialization called on ``netG`` and ``netD``
+# Custom weights initialization called on ``netG`` and ``netD``
+# From the paper the weights should be initialised from a Normal
+# Distribution with mean = 0 and S.D. = 0.2
 def weights_init(m):
     classname = m.__class__.__name__
     if classname.find('Conv') != -1:
@@ -135,6 +126,7 @@ def main():
 
     # Apply weights to generator
     netG.apply(weights_init)
+    netD.apply(weights_init)
 
     # Print the models
     print(netG)
@@ -159,9 +151,12 @@ def main():
     fake_label = 0.1
 
     # Training loop
-    num_epochs = 40 # Number of epochs (for demonstration purposes, you should train for more epochs)
+    num_epochs = 75 # Number of epochs
     G_losses = []
     D_losses = []
+    # Initialize lists to track accuracies
+    real_accuracies = []
+    fake_accuracies = []
     iters = 0
 
     # For periodic visualization
@@ -174,7 +169,7 @@ def main():
             
             ############################
             # (1) Update D network
-            ###########################
+            ############################
             ## Train with all-real batch
             netD.zero_grad()
             # Format batch
@@ -207,9 +202,17 @@ def main():
             # Update D
             optimizerD.step()
 
+            # Calculate accuracies
+            real_accuracy = ((output > 0.5).float() == label).float().mean().item()
+            fake_accuracy = ((output < 0.5).float() == label).float().mean().item()
+
+            # Update the lists with the calculated accuracies
+            real_accuracies.append(real_accuracy)
+            fake_accuracies.append(fake_accuracy)
+
             ############################
             # (2) Update G network
-            ###########################
+            ############################
             netG.zero_grad()
             label.fill_(real_label)  # fake labels are real for generator cost
             # Since we just updated D, perform another forward pass of all-fake batch through D
@@ -248,9 +251,6 @@ def main():
             plt.imshow(np.transpose(torchvision.utils.make_grid(fake_images, padding=2, normalize=True), (1, 2, 0)))
             plt.show()
             
-            time.sleep(5)  # Display for 5 seconds
-            plt.close()  # Close the plot
-            
             netG.train()  # Set back to training mode
 
     # Save the models
@@ -266,6 +266,16 @@ def main():
     plt.plot(D_losses,label="D")
     plt.xlabel("iterations")
     plt.ylabel("Loss")
+    plt.legend()
+    plt.show()
+
+    # Plot the training accuracies
+    plt.figure(figsize=(10,5))
+    plt.title("Real vs. Fake Accuracies During Training")
+    plt.plot(real_accuracies, label="Real Accuracy")
+    plt.plot(fake_accuracies, label="Fake Accuracy")
+    plt.xlabel("iterations")
+    plt.ylabel("Accuracy")
     plt.legend()
     plt.show()
 
